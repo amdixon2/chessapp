@@ -35,6 +35,7 @@ let lossCtx = null;
 let accuracyCanvas = null;
 let accuracyCtx = null;
 let accuracyValues = [];
+let evaluationValues = [];
 let headerMenuEl = null;
 let menuToggleBtn = null;
 let menuListEl = null;
@@ -43,6 +44,18 @@ const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
 const LOSS_SCALE_MAX = 9;
 const ACCURACY_SCALE_MAX = 100;
+const ENGINE_WORKER_PATH = 'src/stockfish.js';
+const ENGINE_SEARCH_DEPTH = 16;
+const ENGINE_WAIT_TIMEOUT_MS = 15000;
+const textDecoder = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
+
+let engineWorker = null;
+let engineInitPromise = null;
+let engineListeners = [];
+let engineWaiters = [];
+let engineAnalysisPending = null;
+let engineAnalysisRunning = false;
+let analysisResults = [];
 
 /* Convert a FEN to an 8x8 array */
 function fen2matrix(fen) {
@@ -248,10 +261,16 @@ function load_pgn(pgn, moveListElement) {
     tmp.move(mv);
     positions.push(tmp.fen());
   });
+  evaluationValues = new Array(positions.length).fill(0);
   accuracyValues = new Array(positions.length).fill(50);
+  analysisResults = new Array(positions.length);
+  if (typeof window !== 'undefined') {
+    window.chessappAnalysisResults = analysisResults;
+  }
   renderEvaluationChart();
   renderLossChart();
   renderAccuracyChart();
+  trigger_engine_analysis();
 }
 
 function renderEvaluationChart() {
@@ -300,19 +319,27 @@ function renderEvaluationChart() {
   evalCtx.lineWidth = 1;
   evalCtx.stroke();
 
-  evalCtx.beginPath();
-  for (let ply = 0; ply <= totalPly; ply += 1) {
-    const x = Math.min(ply * stepX, width);
-    const y = valueToY(1);
-    if (ply === 0) {
-      evalCtx.moveTo(x, y);
-    } else {
-      evalCtx.lineTo(x, y);
+  if (positions.length > 0) {
+    evalCtx.beginPath();
+    let lastValue = 0;
+    for (let ply = 0; ply <= totalPly; ply += 1) {
+      const stored = evaluationValues && typeof evaluationValues[ply] === 'number'
+        ? evaluationValues[ply]
+        : null;
+      const value = stored !== null ? stored : lastValue;
+      const x = totalPly > 0 ? Math.min(ply * stepX, width) : 0;
+      const y = valueToY(value);
+      if (ply === 0) {
+        evalCtx.moveTo(x, y);
+      } else {
+        evalCtx.lineTo(x, y);
+      }
+      lastValue = value;
     }
+    evalCtx.strokeStyle = '#b58900';
+    evalCtx.lineWidth = 2;
+    evalCtx.stroke();
   }
-  evalCtx.strokeStyle = '#b58900';
-  evalCtx.lineWidth = 2;
-  evalCtx.stroke();
 
   if (positions.length > 0) {
     const cursorX = Math.min(currentPly * stepX, width);
@@ -475,6 +502,298 @@ function renderAccuracyChart() {
   accuracyCtx.restore();
 }
 
+function publish_analysis_results(results) {
+  analysisResults = results;
+  if (typeof window !== 'undefined') {
+    window.chessappAnalysisResults = results;
+  }
+}
+
+function engine_handle_message(event) {
+  const payload = event && typeof event.data !== 'undefined' ? event.data : event;
+  let text = null;
+  if (typeof payload === 'string') {
+    text = payload;
+  } else if (payload && typeof payload.data === 'string') {
+    text = payload.data;
+  } else if (payload instanceof Uint8Array && textDecoder) {
+    text = textDecoder.decode(payload);
+  }
+  if (typeof text !== 'string') return;
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  lines.forEach(line => {
+    if (typeof console !== 'undefined' && console.log) {
+      console.log('[engine]', line);
+    }
+    engineListeners.slice().forEach(listener => {
+      try {
+        listener(line);
+      } catch (err) {
+        console.error('Engine listener error:', err);
+      }
+    });
+    for (let i = engineWaiters.length - 1; i >= 0; i -= 1) {
+      const waiter = engineWaiters[i];
+      if (!waiter) continue;
+      try {
+        if (waiter.predicate(line)) {
+          engineWaiters.splice(i, 1);
+          waiter.resolve(line);
+        }
+      } catch (err) {
+        engineWaiters.splice(i, 1);
+        waiter.resolve(line);
+      }
+    }
+  });
+}
+
+function engine_init_worker() {
+  if (engineWorker || typeof Worker === 'undefined') return engineWorker;
+  try {
+    engineWorker = new Worker(ENGINE_WORKER_PATH);
+    engineWorker.addEventListener('message', engine_handle_message);
+    engineWorker.addEventListener('error', (event) => {
+      console.error('Engine worker error:', event.message || event);
+      if (event.filename) {
+        console.error('Engine worker source:', event.filename, 'line:', event.lineno);
+      }
+    });
+    engineWorker.addEventListener('messageerror', (event) => {
+      console.error('Engine worker messageerror:', event);
+    });
+  } catch (err) {
+    console.warn('Failed to initialise engine worker:', err);
+    engineWorker = null;
+  }
+  return engineWorker;
+}
+
+function engine_send(command) {
+  if (!engineWorker) return false;
+  engineWorker.postMessage(command);
+  return true;
+}
+
+function engine_wait_for(predicate, timeoutMs = ENGINE_WAIT_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const waiter = {
+      predicate,
+      resolve
+    };
+    engineWaiters.push(waiter);
+    const timer = setTimeout(() => {
+      const index = engineWaiters.indexOf(waiter);
+      if (index !== -1) engineWaiters.splice(index, 1);
+      reject(new Error('Engine response timeout'));
+    }, timeoutMs);
+
+    waiter.resolve = (value) => {
+      clearTimeout(timer);
+      const idx = engineWaiters.indexOf(waiter);
+      if (idx !== -1) engineWaiters.splice(idx, 1);
+      resolve(value);
+    };
+  });
+}
+
+function engine_add_listener(listener) {
+  engineListeners.push(listener);
+  return () => {
+    const idx = engineListeners.indexOf(listener);
+    if (idx !== -1) engineListeners.splice(idx, 1);
+  };
+}
+
+async function engine_initialise() {
+  if (engineInitPromise) return engineInitPromise;
+  engineInitPromise = (async () => {
+    if (!engine_init_worker()) {
+      throw new Error('Engine worker unavailable');
+    }
+    console.debug('Sending UCI handshake to engine worker…');
+    if (!engine_send('uci')) {
+      throw new Error('Failed to send uci command');
+    }
+    await engine_wait_for(line => line.startsWith('uciok'));
+    console.debug('Engine responded with uciok');
+    if (!engine_send('ucinewgame')) {
+      throw new Error('Failed to send ucinewgame command');
+    }
+    if (!engine_send('isready')) {
+      throw new Error('Failed to send isready command');
+    }
+    await engine_wait_for(line => line.startsWith('readyok'));
+    console.debug('Engine responded with readyok');
+    return true;
+  })().catch(err => {
+    console.warn('Engine initialisation failed:', err);
+    return false;
+  });
+  return engineInitPromise;
+}
+
+function parse_engine_info_line(line) {
+  if (!line || typeof line !== 'string') {
+    return { score: null, pv: [], rawInfo: line || '' };
+  }
+  const tokens = line.trim().split(/\s+/);
+  const scoreIdx = tokens.indexOf('score');
+  let score = null;
+  if (scoreIdx !== -1 && tokens[scoreIdx + 1] && tokens[scoreIdx + 2]) {
+    const scoreType = tokens[scoreIdx + 1];
+    const scoreValue = parseInt(tokens[scoreIdx + 2], 10);
+    if (!Number.isNaN(scoreValue)) {
+      score = { type: scoreType, value: scoreValue };
+    }
+  }
+  const pvIdx = tokens.indexOf('pv');
+  const pv = pvIdx !== -1 ? tokens.slice(pvIdx + 1) : [];
+  return { score, pv, rawInfo: line };
+}
+
+function normalize_score_for_white(score, fen) {
+  if (!score || typeof score !== 'object') return null;
+  if (!fen || typeof fen !== 'string') return null;
+  const fenParts = fen.split(' ');
+  const activeColor = fenParts[1] || 'w';
+  const perspective = activeColor === 'w' ? 1 : -1;
+
+  if (score.type === 'cp') {
+    const cpValue = score.value / 100;
+    const adjusted = cpValue * perspective;
+    return Math.max(EVAL_SCALE_MIN, Math.min(EVAL_SCALE_MAX, adjusted));
+  }
+  if (score.type === 'mate') {
+    if (score.value === 0) return 0;
+    const mateSign = score.value > 0 ? 1 : -1;
+    const adjusted = mateSign * perspective * EVAL_SCALE_MAX;
+    return Math.max(EVAL_SCALE_MIN, Math.min(EVAL_SCALE_MAX, adjusted));
+  }
+  return null;
+}
+
+function update_engine_result_cache(result) {
+  if (!result || typeof result.ply !== 'number') return;
+  if (!positions[result.ply] || positions[result.ply] !== result.fen) return;
+  if (!Array.isArray(evaluationValues) || result.ply >= evaluationValues.length) return;
+  if (!Array.isArray(analysisResults)) analysisResults = [];
+  analysisResults[result.ply] = result;
+  if (typeof window !== 'undefined') {
+    window.chessappAnalysisResults = analysisResults;
+  }
+  const normalized = normalize_score_for_white(result.score, result.fen);
+  if (typeof normalized === 'number' && !Number.isNaN(normalized)) {
+    evaluationValues[result.ply] = normalized;
+    renderEvaluationChart();
+  }
+}
+
+function engine_analyse_fen(fen, plyIndex) {
+  return new Promise((resolve, reject) => {
+    if (!engine_send(`position fen ${fen}`)) {
+      reject(new Error('Engine worker not available'));
+      return;
+    }
+    if (!engine_send(`go depth ${ENGINE_SEARCH_DEPTH}`)) {
+      reject(new Error('Failed to send go command'));
+      return;
+    }
+
+    const infoLines = [];
+    let settled = false;
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      removeListener();
+      clearTimeout(timeoutId);
+    };
+
+    const listener = (line) => {
+      if (line.startsWith('info ')) {
+        infoLines.push(line);
+        return;
+      }
+      if (!line.startsWith('bestmove ')) return;
+
+      const parts = line.trim().split(/\s+/);
+      const bestmove = parts[1] || '';
+      let ponder = null;
+      if (parts[2] === 'ponder' && parts[3]) {
+        ponder = parts[3];
+      }
+      const lastInfo = infoLines.length > 0 ? infoLines[infoLines.length - 1] : '';
+      const parsed = parse_engine_info_line(lastInfo);
+      const result = {
+        fen,
+        ply: plyIndex,
+        bestmove,
+        ponder,
+        score: parsed.score,
+        pv: parsed.pv,
+        rawInfo: parsed.rawInfo
+      };
+      update_engine_result_cache(result);
+      cleanup();
+      resolve(result);
+    };
+
+    const removeListener = engine_add_listener(listener);
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('Engine search timeout'));
+    }, ENGINE_WAIT_TIMEOUT_MS * 2);
+  });
+}
+
+async function engine_run_analysis_for_list(fenList) {
+  const initialised = await engine_initialise();
+  if (!initialised) return;
+  const results = [];
+  for (let i = 0; i < fenList.length; i += 1) {
+    const fen = fenList[i];
+    try {
+      const result = await engine_analyse_fen(fen, i);
+      results[i] = result;
+    } catch (err) {
+      const errorResult = { fen, ply: i, error: err.message };
+      results[i] = errorResult;
+      update_engine_result_cache(errorResult);
+      console.warn('Engine analysis failed for FEN:', fen, err);
+    }
+  }
+  publish_analysis_results(results);
+}
+
+async function engine_process_queue() {
+  if (engineAnalysisRunning) return;
+  if (!engineAnalysisPending || engineAnalysisPending.length === 0) return;
+  const nextList = engineAnalysisPending;
+  engineAnalysisPending = null;
+  engineAnalysisRunning = true;
+  try {
+    await engine_run_analysis_for_list(nextList);
+  } catch (err) {
+    console.warn('Engine analysis run failed:', err);
+  } finally {
+    engineAnalysisRunning = false;
+    if (engineAnalysisPending && engineAnalysisPending.length > 0) {
+      engine_process_queue();
+    }
+  }
+}
+
+function engine_schedule_analysis(fenList) {
+  if (!Array.isArray(fenList) || fenList.length === 0) return;
+  engineAnalysisPending = fenList;
+  engine_process_queue();
+}
+
+function trigger_engine_analysis() {
+  if (!positions.length) return;
+  engine_schedule_analysis(positions.slice());
+}
+
 function init_left_column_toggles() {
   const toggleButtons = Array.from(document.querySelectorAll('.left-column__toggle'));
   if (!toggleButtons.length) return;
@@ -513,38 +832,6 @@ function init_left_column_toggles() {
 }
 
 
-var enginename = "stockfish"
-  , first = true
-  , engine = null;
-
-function logOutput(data)
-{
-  let out = "";
-  out = data;
-  if (first) {
-    first = false;
-  } else {
-    out += "\n";
-  }
-  console.log(out);
-}
-
-function sendCommand(cmd)
-{
-  engine.send(cmd);
-}
-
-function init_engine()
-{
-  engine = loadEngine("/src/" + enginename + ".js#/src/" + enginename + ".wasm", function ()
-		{ console.log("__up__"); });
-  engine.stream = logOutput;
-  sendCommand("uci\n");
-  sendCommand("ucinewgame\n");
-  sendCommand("isready\n");
-}
-
-
 /* Main */
 function main() {
   boardEl = document.getElementById('chessboard');
@@ -573,7 +860,6 @@ function main() {
   }
   document.addEventListener('click', header_menu_handle_document_click);
   document.addEventListener('keydown', header_menu_handle_keydown);
-  init_engine();
   load_pgn(operaGamePGN, moveListEl);
   load_ply(0, true);
 }
