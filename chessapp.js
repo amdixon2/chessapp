@@ -32,6 +32,9 @@ let evalCanvas = null;
 let evalCtx = null;
 let lossCanvas = null;
 let lossCtx = null;
+let accuracyCanvas = null;
+let accuracyCtx = null;
+let accuracyValues = [];
 let headerMenuEl = null;
 let menuToggleBtn = null;
 let menuListEl = null;
@@ -39,6 +42,7 @@ let menuListEl = null;
 const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
 const LOSS_SCALE_MAX = 9;
+const ACCURACY_SCALE_MAX = 100;
 
 /* Convert a FEN to an 8x8 array */
 function fen2matrix(fen) {
@@ -151,6 +155,7 @@ function load_ply(ply, forceFull = false) {
   highlight_move(currentPly);
   renderEvaluationChart();
   renderLossChart();
+  renderAccuracyChart();
 }
 
 function header_menu_set_open(isOpen) {
@@ -243,8 +248,10 @@ function load_pgn(pgn, moveListElement) {
     tmp.move(mv);
     positions.push(tmp.fen());
   });
+  accuracyValues = new Array(positions.length).fill(50);
   renderEvaluationChart();
   renderLossChart();
+  renderAccuracyChart();
 }
 
 function renderEvaluationChart() {
@@ -398,6 +405,113 @@ function renderLossChart() {
   lossCtx.restore();
 }
 
+function renderAccuracyChart() {
+  if (!accuracyCtx || !accuracyCanvas) return;
+  const width = accuracyCanvas.width;
+  const height = accuracyCanvas.height;
+  const totalPly = Math.max(positions.length - 1, 0);
+  const stepX = totalPly > 0 ? width / totalPly : width;
+
+  const valueToY = (value) => {
+    const clamped = Math.max(0, Math.min(ACCURACY_SCALE_MAX, value));
+    const normalized = clamped / ACCURACY_SCALE_MAX;
+    return height - normalized * height;
+  };
+
+  accuracyCtx.clearRect(0, 0, width, height);
+
+  accuracyCtx.save();
+  accuracyCtx.font = '12px "Courier New", monospace';
+  accuracyCtx.textAlign = 'left';
+  accuracyCtx.textBaseline = 'middle';
+
+  const markerValues = [0, 25, 50, 75, 100];
+  markerValues.forEach((value) => {
+    const y = valueToY(value);
+    accuracyCtx.beginPath();
+    accuracyCtx.moveTo(0, y);
+    accuracyCtx.lineTo(width, y);
+    accuracyCtx.setLineDash(value === 50 ? [] : [4, 4]);
+    accuracyCtx.strokeStyle = value === 50 ? '#268bd2' : '#586e75';
+    accuracyCtx.stroke();
+    accuracyCtx.setLineDash([]);
+    accuracyCtx.fillStyle = '#93a1a1';
+    const safeY = Math.min(height - 8, Math.max(8, y));
+    accuracyCtx.fillText(`${value}%`, 4, safeY);
+  });
+
+  accuracyCtx.beginPath();
+  accuracyCtx.moveTo(0, 0);
+  accuracyCtx.lineTo(0, height);
+  accuracyCtx.strokeStyle = '#93a1a1';
+  accuracyCtx.lineWidth = 1;
+  accuracyCtx.stroke();
+
+  accuracyCtx.beginPath();
+  for (let ply = 0; ply <= totalPly; ply += 1) {
+    const x = Math.min(ply * stepX, width);
+    const value = accuracyValues[ply] !== undefined ? accuracyValues[ply] : 50;
+    const y = valueToY(value);
+    if (ply === 0) {
+      accuracyCtx.moveTo(x, y);
+    } else {
+      accuracyCtx.lineTo(x, y);
+    }
+  }
+  accuracyCtx.strokeStyle = '#2aa198';
+  accuracyCtx.lineWidth = 2;
+  accuracyCtx.stroke();
+
+  if (positions.length > 0) {
+    const cursorX = Math.min(currentPly * stepX, width);
+    accuracyCtx.beginPath();
+    accuracyCtx.moveTo(cursorX, 0);
+    accuracyCtx.lineTo(cursorX, height);
+    accuracyCtx.strokeStyle = '#dc322f';
+    accuracyCtx.lineWidth = 1;
+    accuracyCtx.stroke();
+  }
+
+  accuracyCtx.restore();
+}
+
+function init_left_column_toggles() {
+  const toggleButtons = Array.from(document.querySelectorAll('.left-column__toggle'));
+  if (!toggleButtons.length) return;
+
+  const activateButton = (targetBtn) => {
+    toggleButtons.forEach(btn => {
+      const isActive = btn === targetBtn;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      btn.setAttribute('tabindex', isActive ? '0' : '-1');
+      const sectionId = btn.getAttribute('aria-controls');
+      if (!sectionId) return;
+      const sectionEl = document.getElementById(sectionId);
+      if (!sectionEl) return;
+      if (isActive) {
+        sectionEl.classList.add('is-visible');
+        sectionEl.removeAttribute('hidden');
+      } else {
+        sectionEl.classList.remove('is-visible');
+        sectionEl.setAttribute('hidden', '');
+      }
+    });
+  };
+
+  toggleButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('is-active')) return;
+      activateButton(btn);
+    });
+  });
+
+  const initial = toggleButtons.find(btn => btn.classList.contains('is-active')) || toggleButtons[0];
+  if (initial) {
+    activateButton(initial);
+  }
+}
+
 /* Main */
 function main() {
   boardEl = document.getElementById('chessboard');
@@ -406,6 +520,8 @@ function main() {
   evalCtx = evalCanvas ? evalCanvas.getContext('2d') : null;
   lossCanvas = document.getElementById('lossCanvas');
   lossCtx = lossCanvas ? lossCanvas.getContext('2d') : null;
+  accuracyCanvas = document.getElementById('accuracyCanvas');
+  accuracyCtx = accuracyCanvas ? accuracyCanvas.getContext('2d') : null;
   headerMenuEl = document.getElementById('headerMenu');
   menuToggleBtn = document.getElementById('menuToggle');
   menuListEl = document.getElementById('menuList');
@@ -414,6 +530,7 @@ function main() {
   document.getElementById('btnNext').addEventListener('click', btnNext_click);
   document.getElementById('btnEnd').addEventListener('click', btnEnd_click);
   document.getElementById('btnPlay').addEventListener('click', btnPlay_click);
+  init_left_column_toggles();
   if (menuToggleBtn) {
     menuToggleBtn.addEventListener('click', header_menu_toggle);
     menuToggleBtn.addEventListener('keydown', header_menu_handle_keydown);

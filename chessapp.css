@@ -143,18 +143,73 @@ header h1 {
     display: flex;
     flex-direction: column;
     align-items: center;
+    width: 400px;
   }
 
   .left-column canvas {
-    width: 400px;
-    height: 300px;
+    width: 100%;
     border: 2px solid #586e75;
     background-color: #001f27;
   }
+}
 
-  .left-column canvas + canvas {
-    margin-top: 16px;
-  }
+.left-column__toggle-group {
+  display: flex;
+  width: 100%;
+  margin-bottom: 12px;
+  border: 1px solid #586e75;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.left-column__toggle {
+  flex: 1;
+  padding: 8px 12px;
+  background-color: #002b36;
+  color: #93a1a1;
+  border: none;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.left-column__toggle + .left-column__toggle {
+  border-left: 1px solid #586e75;
+}
+
+.left-column__toggle.is-active {
+  background-color: #268bd2;
+  color: #fdf6e3;
+}
+
+.left-column__toggle:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px #b58900;
+}
+
+.left-column__section {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.left-column__section.is-visible {
+  display: flex;
+}
+
+.left-column__section canvas + canvas {
+  margin-top: 16px;
+}
+
+#analysisCanvas,
+#lossCanvas {
+  height: 285px;
+}
+
+#accuracyCanvas {
+  height: 200px;
 }
 
 /* === Chessboard === */

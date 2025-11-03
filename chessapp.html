@@ -14,18 +14,67 @@
 
     <div class="container">
       <div class="left-column">
-        <canvas
-          id="analysisCanvas"
-          width="400"
-          height="300"
-          aria-label="Analysis canvas">
+        <div class="left-column__toggle-group" role="tablist">
+          <button
+            type="button"
+            class="left-column__toggle is-active"
+            data-section="evaluation"
+            role="tab"
+            id="leftColumnToggleEvaluation"
+            aria-controls="leftColumnEvaluation"
+            aria-selected="true"
+            tabindex="0"
+          >
+            Evaluation
+          </button>
+          <button
+            type="button"
+            class="left-column__toggle"
+            data-section="review"
+            role="tab"
+            id="leftColumnToggleReview"
+            aria-controls="leftColumnReview"
+            aria-selected="false"
+            tabindex="-1"
+          >
+            Review
+          </button>
+        </div>
+        <div
+          class="left-column__section is-visible"
+          id="leftColumnEvaluation"
+          role="tabpanel"
+          aria-labelledby="leftColumnToggleEvaluation"
+          tabindex="0"
+        >
+          <canvas
+            id="analysisCanvas"
+            width="400"
+            height="285"
+            aria-label="Analysis canvas">
 	</canvas>
-        <canvas
-          id="lossCanvas"
-          width="400"
-          height="300"
-          aria-label="Evaluation loss canvas">
+          <canvas
+            id="lossCanvas"
+            width="400"
+            height="285"
+            aria-label="Evaluation loss canvas">
 	</canvas>
+        </div>
+        <div
+          class="left-column__section"
+          id="leftColumnReview"
+          role="tabpanel"
+          aria-labelledby="leftColumnToggleReview"
+          tabindex="0"
+          hidden
+        >
+          <canvas
+            id="accuracyCanvas"
+            width="400"
+            height="200"
+            aria-label="Accuracy canvas">
+	</canvas>
+        </div>
       </div>
 
       <div class="board-container">
