@@ -51,6 +51,10 @@ header h1 {
     border: 2px solid #586e75;
     background-color: #001f27;
   }
+
+  .left-column canvas + canvas {
+    margin-top: 16px;
+  }
 }
 
 /* Board container to hold board + buttons */

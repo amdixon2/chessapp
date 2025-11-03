@@ -30,9 +30,12 @@ let isPlaying = false;
 let lastMatrix = null;
 let evalCanvas = null;
 let evalCtx = null;
+let lossCanvas = null;
+let lossCtx = null;
 
 const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
+const LOSS_SCALE_MAX = 9;
 
 /* Convert a FEN to an 8x8 array */
 function fen2matrix(fen) {
@@ -144,6 +147,7 @@ function load_ply(ply, forceFull = false) {
   draw_board(positions[currentPly], forceFull);
   highlight_move(currentPly);
   renderEvaluationChart();
+  renderLossChart();
 }
 
 /* Button handlers */
@@ -205,6 +209,7 @@ function load_pgn(pgn, moveListElement) {
     positions.push(tmp.fen());
   });
   renderEvaluationChart();
+  renderLossChart();
 }
 
 function renderEvaluationChart() {
@@ -238,7 +243,8 @@ function renderEvaluationChart() {
     evalCtx.stroke();
     evalCtx.setLineDash([]);
     evalCtx.fillStyle = '#93a1a1';
-    evalCtx.fillText(value.toString(), 4, y);
+    const safeY = Math.min(height - 8, Math.max(8, y));
+    evalCtx.fillText(value.toString(), 4, safeY);
   };
 
   for (let marker = EVAL_SCALE_MIN; marker <= EVAL_SCALE_MAX; marker += 3) {
@@ -279,12 +285,92 @@ function renderEvaluationChart() {
   evalCtx.restore();
 }
 
+function renderLossChart() {
+  if (!lossCtx || !lossCanvas) return;
+  const width = lossCanvas.width;
+  const height = lossCanvas.height;
+  const totalPly = Math.max(positions.length - 1, 0);
+  const stepX = totalPly > 0 ? width / totalPly : width;
+
+  const valueToY = (value) => {
+    const clamped = Math.max(0, Math.min(LOSS_SCALE_MAX, value));
+    const normalized = clamped / LOSS_SCALE_MAX;
+    return height - normalized * height;
+  };
+
+  lossCtx.clearRect(0, 0, width, height);
+
+  lossCtx.save();
+  lossCtx.font = '12px "Courier New", monospace';
+  lossCtx.textAlign = 'left';
+  lossCtx.textBaseline = 'middle';
+
+  const drawHorizontalGuide = (value) => {
+    const y = valueToY(value);
+    lossCtx.beginPath();
+    lossCtx.moveTo(0, y);
+    lossCtx.lineTo(width, y);
+    lossCtx.setLineDash(value === 0 ? [] : [4, 4]);
+    lossCtx.strokeStyle = value === 0 ? '#268bd2' : '#586e75';
+    lossCtx.stroke();
+    lossCtx.setLineDash([]);
+    lossCtx.fillStyle = '#93a1a1';
+    const safeY = Math.min(height - 8, Math.max(8, y));
+    lossCtx.fillText(value.toString(), 4, safeY);
+  };
+
+  for (let marker = 0; marker <= LOSS_SCALE_MAX; marker += 3) {
+    drawHorizontalGuide(marker);
+  }
+
+  lossCtx.beginPath();
+  lossCtx.moveTo(0, 0);
+  lossCtx.lineTo(0, height);
+  lossCtx.strokeStyle = '#93a1a1';
+  lossCtx.lineWidth = 1;
+  lossCtx.stroke();
+
+  const barWidth = totalPly > 0 ? Math.max(stepX * 0.6, 2) : stepX;
+  for (let ply = 1; ply <= totalPly; ply += 1) {
+    const xCenter = Math.min((ply - 0.5) * stepX, width);
+    const value = 1;
+    const yTop = valueToY(value);
+    const barColor = ply % 2 === 1 ? '#ffffff' : '#000000';
+    lossCtx.fillStyle = barColor;
+    lossCtx.strokeStyle = '#586e75';
+    lossCtx.lineWidth = 1;
+    lossCtx.beginPath();
+    lossCtx.rect(
+      xCenter - barWidth / 2,
+      yTop,
+      barWidth,
+      height - yTop
+    );
+    lossCtx.fill();
+    lossCtx.stroke();
+  }
+
+  if (positions.length > 0) {
+    const cursorX = Math.min(currentPly * stepX, width);
+    lossCtx.beginPath();
+    lossCtx.moveTo(cursorX, 0);
+    lossCtx.lineTo(cursorX, height);
+    lossCtx.strokeStyle = '#dc322f';
+    lossCtx.lineWidth = 1;
+    lossCtx.stroke();
+  }
+
+  lossCtx.restore();
+}
+
 /* Main */
 function main() {
   boardEl = document.getElementById('chessboard');
   moveListEl = document.getElementById('moveList');
   evalCanvas = document.getElementById('analysisCanvas');
   evalCtx = evalCanvas ? evalCanvas.getContext('2d') : null;
+  lossCanvas = document.getElementById('lossCanvas');
+  lossCtx = lossCanvas ? lossCanvas.getContext('2d') : null;
   document.getElementById('btnStart').addEventListener('click', btnStart_click);
   document.getElementById('btnPrev').addEventListener('click', btnPrev_click);
   document.getElementById('btnNext').addEventListener('click', btnNext_click);
