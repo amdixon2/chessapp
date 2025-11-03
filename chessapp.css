@@ -12,8 +12,12 @@ body {
 
 /* === Header === */
 header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  padding: 10px;
+  padding: 10px 48px;
   background-color: #073642; /* base02 */
   color: #b58900; /* yellow accent */
   width: 100%;
@@ -24,6 +28,102 @@ header h1 {
   font-size: 1.4rem;
   margin: 0;
   color: #b58900;
+}
+
+.board-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.header-menu {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  display: inline-flex;
+}
+
+.header-menu__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background-color: #002b36;
+  color: #b58900;
+  border: 1px solid #586e75;
+  border-radius: 50%;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.header-menu__icon {
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  display: block;
+}
+
+.header-menu__icon *,
+.header-menu__icon {
+  stroke: currentColor;
+  fill: none;
+}
+
+.header-menu__toggle:hover,
+.header-menu__toggle:focus {
+  background-color: #268bd2;
+  color: #fdf6e3;
+  outline: none;
+}
+
+.header-menu__list {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  margin: 0;
+  list-style: none;
+  background-color: #002b36;
+  border: 1px solid #586e75;
+  border-radius: 6px;
+  min-width: 150px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.header-menu__item {
+  width: 100%;
+  background: none;
+  border: none;
+  color: #93a1a1;
+  text-align: left;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.header-menu__item:hover,
+.header-menu__item:focus {
+  background-color: #268bd2;
+  color: #fdf6e3;
+  outline: none;
+}
+
+.header-menu--open .header-menu__list {
+  display: flex;
 }
 
 /* === Layout === */
@@ -55,13 +155,6 @@ header h1 {
   .left-column canvas + canvas {
     margin-top: 16px;
   }
-}
-
-/* Board container to hold board + buttons */
-.board-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
 }
 
 /* === Chessboard === */

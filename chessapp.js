@@ -32,6 +32,9 @@ let evalCanvas = null;
 let evalCtx = null;
 let lossCanvas = null;
 let lossCtx = null;
+let headerMenuEl = null;
+let menuToggleBtn = null;
+let menuListEl = null;
 
 const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
@@ -148,6 +151,38 @@ function load_ply(ply, forceFull = false) {
   highlight_move(currentPly);
   renderEvaluationChart();
   renderLossChart();
+}
+
+function header_menu_set_open(isOpen) {
+  if (!headerMenuEl || !menuToggleBtn) return;
+  headerMenuEl.classList.toggle('header-menu--open', isOpen);
+  menuToggleBtn.setAttribute('aria-expanded', String(isOpen));
+}
+
+function header_menu_toggle() {
+  if (!headerMenuEl) return;
+  const isOpen = headerMenuEl.classList.contains('header-menu--open');
+  header_menu_set_open(!isOpen);
+}
+
+function header_menu_handle_document_click(event) {
+  if (!headerMenuEl || !menuToggleBtn) return;
+  if (!headerMenuEl.classList.contains('header-menu--open')) return;
+  if (headerMenuEl.contains(event.target)) return;
+  header_menu_set_open(false);
+}
+
+function header_menu_handle_keydown(event) {
+  if (event.key === 'Escape') {
+    header_menu_set_open(false);
+  }
+}
+
+function header_menu_handle_list_click(event) {
+  const target = event.target;
+  if (target && target.classList.contains('header-menu__item')) {
+    header_menu_set_open(false);
+  }
 }
 
 /* Button handlers */
@@ -371,11 +406,23 @@ function main() {
   evalCtx = evalCanvas ? evalCanvas.getContext('2d') : null;
   lossCanvas = document.getElementById('lossCanvas');
   lossCtx = lossCanvas ? lossCanvas.getContext('2d') : null;
+  headerMenuEl = document.getElementById('headerMenu');
+  menuToggleBtn = document.getElementById('menuToggle');
+  menuListEl = document.getElementById('menuList');
   document.getElementById('btnStart').addEventListener('click', btnStart_click);
   document.getElementById('btnPrev').addEventListener('click', btnPrev_click);
   document.getElementById('btnNext').addEventListener('click', btnNext_click);
   document.getElementById('btnEnd').addEventListener('click', btnEnd_click);
   document.getElementById('btnPlay').addEventListener('click', btnPlay_click);
+  if (menuToggleBtn) {
+    menuToggleBtn.addEventListener('click', header_menu_toggle);
+    menuToggleBtn.addEventListener('keydown', header_menu_handle_keydown);
+  }
+  if (menuListEl) {
+    menuListEl.addEventListener('click', header_menu_handle_list_click);
+  }
+  document.addEventListener('click', header_menu_handle_document_click);
+  document.addEventListener('keydown', header_menu_handle_keydown);
   load_pgn(operaGamePGN, moveListEl);
   load_ply(0, true);
 }
