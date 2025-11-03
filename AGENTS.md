@@ -3,23 +3,25 @@
 > **Purpose:** Define a clear, modular “agent” architecture for the Chessgame Visualiser (Chessapp) so the codebase can grow from a demo into a maintainable, testable application with engine-backed analysis.
 
 ## 1) Context
-- **Project goal:** View and analyse chess games in the browser.
-- **Current stack:** Static HTML/CSS/JS with `chess.js` as the rules/PGN parser; one PGN (Morphy’s Opera Game) hard‑coded for now.
-- **Key UI:** A board, a sidebar move list, and game navigation controls: **Start / Prev / Next / End / Play**.
+- **Project goal:** View and analyse chess games in the browser, with supporting visual telemetry.
+- **Current stack:** Static HTML/CSS/JS with `chess.js` as the rules/PGN parser; one PGN (Morphy’s Opera Game) hard‑coded for now. Wide layouts now include two stacked canvases (evaluation line + evaluation loss bars) in a left column beside the board.
+- **Key UI:** Left analysis column, central board, sidebar move list, and navigation controls: **Start / Prev / Next / End / Play**.
 
 This document proposes a lightweight, message‑passing “agents” model that can be implemented incrementally from the existing code.
 
 ---
 
 ## 2) Agent Roster
-Below are recommended agents (small, single‑responsibility modules). We'll start with the first five and add analysis later.
+Below are recommended agents (small, single‑responsibility modules). Start with A–G to mirror the current UI; layer in engine-backed analysis afterwards.
 
 ### A. **PGN Loader Agent**
 **Responsibility**: Load PGN from a string, URL, or file input and normalise it.
 - **Inputs**: `pgnSource: 'inline' | 'url' | 'file'`, `value: string`
-- **Outputs (events)**: `pgn.loaded({ headers, movesSAN, initialFEN })`, `pgn.error({ reason })`
+- **Outputs (events)**: `pgn.loaded({ headers, movesSAN, initialFEN, raw })`, `pgn.error({ reason })`
 - **Key funcs**:
-  - `load_pgn(pgn: string, moveListElement: DOMElement)
+  - `loadFromString(pgn: string)`
+  - `loadFromUrl(url: string)`
+  - `loadFromFile(file: File)`
 - **Notes**: Keep raw PGN text for export; pre‑compute move metadata (move numbers, nags, comments) if present.
 
 ### B. **Game State Agent** (wrapper over `chess.js`)
@@ -67,13 +69,19 @@ Below are recommended agents (small, single‑responsibility modules). We'll sta
 - **Outputs**: `playback.tick` (consumer steps Game State by +1)
 - **Notes**: Pause on mate/terminal state; expose `intervalMs` slider.
 
-### G. **Analysis Agent** (optional; future)
+### G. **Evaluation Chart Agent**
+**Responsibility**: Render evaluation trend (line) and evaluation loss (bar) canvases using shared x-axis spacing.
+- **Inputs**: `charts.render({ evaluations, losses, currentPly })`
+- **Outputs**: none (visual only)
+- **Notes**: Clamp evaluations to -9..+9 and losses to 0..9; accept placeholder arrays until an engine provides real data. Keep cursor synced with game state.
+
+### H. **Analysis Agent** (optional; future)
 **Responsibility**: Feed positions to a chess engine (stockfish.wasm) and return evaluations and best lines.
 - **Inputs**: `analysis.request({ fen, depth?, movetime? })`
 - **Outputs**: `analysis.update({ fen, scoreCp|scoreMate, pv: SAN[] })`, `analysis.ready`
 - **Notes**: Batch while scrubbing; cache by FEN; show eval bar and arrow.
 
-### H. **Annotations Agent** (optional)
+### I. **Annotations Agent** (optional)
 **Responsibility**: Store and render comments, arrows, and custom highlights.
 - **Inputs**: `annotations.add({ ply, text|arrow|shape })`
 - **Outputs**: `annotations.changed`
@@ -102,13 +110,24 @@ Below are recommended agents (small, single‑responsibility modules). We'll sta
 }
 ```
 
+- **`charts.render` payload** (internal helper)
+```ts
+{
+  evaluations: number[]; // length == total plies, values clamped -9..+9
+  losses: number[];      // length == total plies, values clamped 0..9
+  currentPly: number;    // aligns red cursor with navigation
+}
+```
+
 ---
 
 ## 4) Minimal Implementation Plan (Incremental)
-1. **Extract modules** inside `chessapp.js`: `state`, `board`, `moves`, `controls`, `playback`.
-2. **PGN source**: Keep current inline PGN; add an `<input type="file">` and a URL box later.
-4. **Styling**: Retain Solarized theme; expose a CSS variable `--square-size` and compute responsive sizes from it.
-5. **Accessibility**: Add `aria-pressed` and `aria-label` to controls; keyboard shortcuts: `Home ← → End Space`.
+1. **Extract modules** inside `chessapp.js`: `bus`, `state`, `board`, `moves`, `controls`, `playback`, `charts`.
+2. **Bootstrap wiring**: In `main()`, mount agents, subscribe to bus events (`controls.intent`, `state.changed`, `playback.tick`).
+3. **Chart data flow**: Have the state agent emit evaluation/loss arrays (placeholder values until engine wired); chart agent renders both canvases.
+4. **PGN source**: Keep current inline PGN; add `<input type="file">` and a URL box later.
+5. **Styling**: Retain Solarized theme; expose a CSS variable `--square-size` and compute responsive sizes from it.
+6. **Accessibility**: Add `aria-pressed` and `aria-label` to controls; keyboard shortcuts: `Home`, `←`, `→`, `End`, `Space`.
 
 ---
 
@@ -121,13 +140,13 @@ Below are recommended agents (small, single‑responsibility modules). We'll sta
 
 ## 6) Testing Strategy
 - **Unit**: `state` (PGN load, step/goto, terminal flags); `playback` timer logic.
-- **DOM**: Board renders correct pieces for a sample FEN; move list highlights the active ply; buttons disable at bounds.
+- **DOM**: Board renders correct pieces for a sample FEN; move list highlights the active ply; buttons disable at bounds; chart canvas receives correct stroke/bar counts per ply.
 - **E2E (optional)**: Cypress to load page, click through, verify board squares.
 
 ---
 
 ## 7) Mapping to Files (today → target)
-- `chessapp.html` → mounts board, sidebar, controls; adds file/url inputs (later).
+- `chessapp.html` → mounts left-column canvases, board, sidebar, controls; adds file/url inputs (later).
 - `chessapp.css` → keep theme; add CSS variables for sizing and highlights.
 - `chessapp.js` → split into agents (or namespaced objects) + tiny bus.
 - `chess.js` → external rules engine (keep as‑is).
@@ -138,7 +157,7 @@ Below are recommended agents (small, single‑responsibility modules). We'll sta
 1. PGN input (file & URL) + error handling.
 2. Keyboard shortcuts & focus styles.
 3. Playback speed slider (0.5×–3×).
-4. Eval bar & engine PV (Stockfish.wasm).
+4. Feed engine eval + loss data into chart agent (Stockfish.wasm worker, caching, smoothing).
 5. Comments/annotations (arrows, colored squares).
 6. Export annotated PGN.
 7. Multi‑game gallery and opening explorer (optional).
@@ -155,4 +174,4 @@ Below are recommended agents (small, single‑responsibility modules). We'll sta
 
 ## 10) Definition of Done (baseline)
 - Load a PGN (inline or file) → see moves in sidebar → navigate via buttons & keyboard → playback works without skipping → board & move list stay in sync → check/mate visually indicated.
-
+- Evaluation (line) and loss (bar) canvases redraw for every state change and keep the red cursor aligned with the active ply.
