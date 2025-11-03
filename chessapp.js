@@ -28,6 +28,11 @@ let currentPly = 0;
 let autoplayTimer = null;
 let isPlaying = false;
 let lastMatrix = null;
+let evalCanvas = null;
+let evalCtx = null;
+
+const EVAL_SCALE_MIN = -9;
+const EVAL_SCALE_MAX = 9;
 
 /* Convert a FEN to an 8x8 array */
 function fen2matrix(fen) {
@@ -138,6 +143,7 @@ function load_ply(ply, forceFull = false) {
   currentPly = ply;
   draw_board(positions[currentPly], forceFull);
   highlight_move(currentPly);
+  renderEvaluationChart();
 }
 
 /* Button handlers */
@@ -198,12 +204,87 @@ function load_pgn(pgn, moveListElement) {
     tmp.move(mv);
     positions.push(tmp.fen());
   });
+  renderEvaluationChart();
+}
+
+function renderEvaluationChart() {
+  if (!evalCtx || !evalCanvas) return;
+  const width = evalCanvas.width;
+  const height = evalCanvas.height;
+  const totalPly = Math.max(positions.length - 1, 0);
+  const stepX = totalPly > 0 ? width / totalPly : width;
+
+  const valueToY = (value) => {
+    const clamped = Math.max(EVAL_SCALE_MIN, Math.min(EVAL_SCALE_MAX, value));
+    const normalized =
+      (clamped - EVAL_SCALE_MIN) / (EVAL_SCALE_MAX - EVAL_SCALE_MIN);
+    return height - normalized * height;
+  };
+
+  evalCtx.clearRect(0, 0, width, height);
+
+  evalCtx.save();
+  evalCtx.font = '12px "Courier New", monospace';
+  evalCtx.textAlign = 'left';
+  evalCtx.textBaseline = 'middle';
+
+  const drawHorizontalGuide = (value) => {
+    const y = valueToY(value);
+    evalCtx.beginPath();
+    evalCtx.moveTo(0, y);
+    evalCtx.lineTo(width, y);
+    evalCtx.setLineDash(value === 0 ? [] : [4, 4]);
+    evalCtx.strokeStyle = value === 0 ? '#268bd2' : '#586e75';
+    evalCtx.stroke();
+    evalCtx.setLineDash([]);
+    evalCtx.fillStyle = '#93a1a1';
+    evalCtx.fillText(value.toString(), 4, y);
+  };
+
+  for (let marker = EVAL_SCALE_MIN; marker <= EVAL_SCALE_MAX; marker += 3) {
+    drawHorizontalGuide(marker);
+  }
+
+  evalCtx.beginPath();
+  evalCtx.moveTo(0, 0);
+  evalCtx.lineTo(0, height);
+  evalCtx.strokeStyle = '#93a1a1';
+  evalCtx.lineWidth = 1;
+  evalCtx.stroke();
+
+  evalCtx.beginPath();
+  for (let ply = 0; ply <= totalPly; ply += 1) {
+    const x = Math.min(ply * stepX, width);
+    const y = valueToY(1);
+    if (ply === 0) {
+      evalCtx.moveTo(x, y);
+    } else {
+      evalCtx.lineTo(x, y);
+    }
+  }
+  evalCtx.strokeStyle = '#b58900';
+  evalCtx.lineWidth = 2;
+  evalCtx.stroke();
+
+  if (positions.length > 0) {
+    const cursorX = Math.min(currentPly * stepX, width);
+    evalCtx.beginPath();
+    evalCtx.moveTo(cursorX, 0);
+    evalCtx.lineTo(cursorX, height);
+    evalCtx.strokeStyle = '#dc322f';
+    evalCtx.lineWidth = 1;
+    evalCtx.stroke();
+  }
+
+  evalCtx.restore();
 }
 
 /* Main */
 function main() {
   boardEl = document.getElementById('chessboard');
   moveListEl = document.getElementById('moveList');
+  evalCanvas = document.getElementById('analysisCanvas');
+  evalCtx = evalCanvas ? evalCanvas.getContext('2d') : null;
   document.getElementById('btnStart').addEventListener('click', btnStart_click);
   document.getElementById('btnPrev').addEventListener('click', btnPrev_click);
   document.getElementById('btnNext').addEventListener('click', btnNext_click);
