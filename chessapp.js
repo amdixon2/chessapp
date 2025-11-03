@@ -512,6 +512,39 @@ function init_left_column_toggles() {
   }
 }
 
+
+var enginename = "stockfish"
+  , first = true
+  , engine = null;
+
+function logOutput(data)
+{
+  let out = "";
+  out = data;
+  if (first) {
+    first = false;
+  } else {
+    out += "\n";
+  }
+  console.log(out);
+}
+
+function sendCommand(cmd)
+{
+  engine.send(cmd);
+}
+
+function init_engine()
+{
+  engine = loadEngine("/src/" + enginename + ".js#/src/" + enginename + ".wasm", function ()
+		{ console.log("__up__"); });
+  engine.stream = logOutput;
+  sendCommand("uci\n");
+  sendCommand("ucinewgame\n");
+  sendCommand("isready\n");
+}
+
+
 /* Main */
 function main() {
   boardEl = document.getElementById('chessboard');
@@ -540,6 +573,7 @@ function main() {
   }
   document.addEventListener('click', header_menu_handle_document_click);
   document.addEventListener('keydown', header_menu_handle_keydown);
+  init_engine();
   load_pgn(operaGamePGN, moveListEl);
   load_ply(0, true);
 }
