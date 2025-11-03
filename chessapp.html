@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Morphy’s Opera Game (1858)</title>
+    <link rel="stylesheet" href="chessapp.css" />
+    <script src="chess.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Paul Morphy vs Duke Karl and Count Isouard — 1858 (1–0)</h1>
+    </header>
+
+    <div class="container">
+      <div class="board-container">
+        <div class="board" id="chessboard"></div>
+
+        <!-- New Control Buttons -->
+        <div class="controls">
+          <button id="btnStart">&lt;&lt;</button>
+          <button id="btnPrev">&lt;</button>
+          <button id="btnNext">&gt;</button>
+          <button id="btnEnd">&gt;&gt;</button>
+          <button id="btnPlay">+</button>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <ol id="moveList"></ol>
+      </div>
+    </div>
+
+    <script src="chessapp.js"></script>
+  </body>
+</html>
+
