@@ -544,4 +544,12 @@ function main() {
   load_ply(0, true);
 }
 
-document.addEventListener('DOMContentLoaded', main);
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('DOMContentLoaded', main);
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    fen2matrix
+  };
+}
