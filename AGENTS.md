@@ -5,6 +5,10 @@
 ## 1) Context
 - **Project goal:** View and analyse chess games in the browser, with supporting visual telemetry.
 - **Current stack:** Static HTML/CSS/JS with `chess.js` as the rules/PGN parser; one PGN (Morphy’s Opera Game) hard‑coded for now. Wide layouts now include two stacked canvases (evaluation line + evaluation loss bars) in a left column beside the board.
+- **Engine integration (recent work):**
+  - `stockfish.js` web worker drives UCI lifecycle (`uci → ucinewgame → isready → go depth 16`) for every FEN in the game.
+  - Results are normalised to white’s POV, clamped to ±9, cached in `localStorage` (`chessapp:analysis:<fen>`), and streamed into `window.chessappAnalysisResults`.
+  - Evaluation line re-renders incrementally as each depth-16 result arrives; loss bars plot absolute eval deltas per ply (clamped to 9).
 - **Key UI:** Left analysis column, central board, sidebar move list, and navigation controls: **Start / Prev / Next / End / Play**.
 
 This document proposes a lightweight, message‑passing “agents” model that can be implemented incrementally from the existing code.
