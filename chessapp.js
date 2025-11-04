@@ -35,6 +35,7 @@ let lossCtx = null;
 let accuracyCanvas = null;
 let accuracyCtx = null;
 let accuracyValues = [];
+let winPercentValues = [];
 let lossValues = [];
 let evaluationValues = [];
 let headerMenuEl = null;
@@ -45,6 +46,10 @@ const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
 const LOSS_SCALE_MAX = 9;
 const ACCURACY_SCALE_MAX = 100;
+const WIN_PERCENT_EXPONENT_FACTOR = 0.00368208;
+const ACCURACY_CURVE_A = 103.1668;
+const ACCURACY_CURVE_B = 0.04354;
+const ACCURACY_CURVE_C = 3.1669;
 const ENGINE_WORKER_PATH = 'src/stockfish.js';
 const ENGINE_SEARCH_DEPTH = 16;
 const ENGINE_WAIT_TIMEOUT_MS = 15000;
@@ -284,8 +289,8 @@ function load_pgn(pgn, moveListElement) {
     positions.push(tmp.fen());
     evaluationValues.push(default_eval_for_position(tmp));
   });
-  accuracyValues = new Array(positions.length).fill(50);
   recompute_loss_values();
+  recompute_win_and_accuracy_values();
   analysisResults = new Array(positions.length);
   if (typeof window !== 'undefined') {
     window.chessappAnalysisResults = analysisResults;
@@ -465,8 +470,8 @@ function renderAccuracyChart() {
   if (!accuracyCtx || !accuracyCanvas) return;
   const width = accuracyCanvas.width;
   const height = accuracyCanvas.height;
-  const totalPly = Math.max(positions.length - 1, 0);
-  const stepX = totalPly > 0 ? width / totalPly : width;
+  const totalMoves = Math.max(positions.length - 1, 0);
+  const stepX = totalMoves > 0 ? width / totalMoves : width;
 
   const valueToY = (value) => {
     const clamped = Math.max(0, Math.min(ACCURACY_SCALE_MAX, value));
@@ -503,23 +508,29 @@ function renderAccuracyChart() {
   accuracyCtx.lineWidth = 1;
   accuracyCtx.stroke();
 
-  accuracyCtx.beginPath();
-  for (let ply = 0; ply <= totalPly; ply += 1) {
-    const x = Math.min(ply * stepX, width);
-    const value = accuracyValues[ply] !== undefined ? accuracyValues[ply] : 50;
-    const y = valueToY(value);
-    if (ply === 0) {
-      accuracyCtx.moveTo(x, y);
-    } else {
-      accuracyCtx.lineTo(x, y);
+  if (totalMoves > 0 && accuracyValues.length > 0) {
+    accuracyCtx.beginPath();
+    for (let moveIdx = 0; moveIdx < totalMoves; moveIdx += 1) {
+      const x = Math.min((moveIdx + 0.5) * stepX, width);
+      const rawValue = accuracyValues[moveIdx];
+      const value = typeof rawValue === 'number' && !Number.isNaN(rawValue)
+        ? rawValue
+        : 100;
+      const y = valueToY(value);
+      if (moveIdx === 0) {
+        accuracyCtx.moveTo(x, y);
+      } else {
+        accuracyCtx.lineTo(x, y);
+      }
     }
+    accuracyCtx.strokeStyle = '#2aa198';
+    accuracyCtx.lineWidth = 2;
+    accuracyCtx.stroke();
   }
-  accuracyCtx.strokeStyle = '#2aa198';
-  accuracyCtx.lineWidth = 2;
-  accuracyCtx.stroke();
 
-  if (positions.length > 0) {
-    const cursorX = Math.min(currentPly * stepX, width);
+  if (totalMoves > 0 && currentPly > 0) {
+    const moveIdx = Math.min(currentPly, totalMoves) - 1;
+    const cursorX = Math.min((moveIdx + 0.5) * stepX, width);
     accuracyCtx.beginPath();
     accuracyCtx.moveTo(cursorX, 0);
     accuracyCtx.lineTo(cursorX, height);
@@ -723,6 +734,8 @@ function default_eval_for_position(chessInstance) {
 function recompute_loss_values() {
   if (!Array.isArray(evaluationValues) || evaluationValues.length === 0) {
     lossValues = [];
+    winPercentValues = [];
+    accuracyValues = [];
     return;
   }
   const next = new Array(evaluationValues.length).fill(0);
@@ -741,6 +754,68 @@ function recompute_loss_values() {
     next[ply] = Math.min(LOSS_SCALE_MAX, diff);
   }
   lossValues = next;
+}
+
+function evaluation_value_to_centipawns(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 0;
+  }
+  const clamped = Math.max(EVAL_SCALE_MIN, Math.min(EVAL_SCALE_MAX, value));
+  return clamped * 100;
+}
+
+function compute_win_percent_from_eval(evalValue) {
+  const centipawns = evaluation_value_to_centipawns(evalValue);
+  const logistic =
+    2 / (1 + Math.exp(-WIN_PERCENT_EXPONENT_FACTOR * centipawns)) - 1;
+  const result = 50 + 50 * logistic;
+  return Math.max(0, Math.min(100, result));
+}
+
+function compute_accuracy_for_move(winPercentBeforeWhite, winPercentAfterWhite, moveIndex) {
+  const beforeWhite = typeof winPercentBeforeWhite === 'number' && !Number.isNaN(winPercentBeforeWhite)
+    ? winPercentBeforeWhite
+    : 50;
+  const afterWhite = typeof winPercentAfterWhite === 'number' && !Number.isNaN(winPercentAfterWhite)
+    ? winPercentAfterWhite
+    : beforeWhite;
+
+  const isWhiteMove = (moveIndex % 2) === 0;
+  const before = isWhiteMove ? beforeWhite : 100 - beforeWhite;
+  const after = isWhiteMove ? afterWhite : 100 - afterWhite;
+
+  const delta = before - after;
+  const raw =
+    ACCURACY_CURVE_A * Math.exp(-ACCURACY_CURVE_B * delta) - ACCURACY_CURVE_C;
+  return Math.max(0, Math.min(100, raw));
+}
+
+function recompute_win_and_accuracy_values() {
+  if (!Array.isArray(evaluationValues) || evaluationValues.length === 0) {
+    winPercentValues = [];
+    accuracyValues = [];
+    return;
+  }
+  const winPercentages = new Array(evaluationValues.length);
+  for (let i = 0; i < evaluationValues.length; i += 1) {
+    winPercentages[i] = compute_win_percent_from_eval(evaluationValues[i]);
+  }
+  winPercentValues = winPercentages;
+
+  if (winPercentages.length <= 1) {
+    accuracyValues = [];
+    return;
+  }
+
+  const nextAccuracy = new Array(winPercentages.length - 1);
+  for (let ply = 1; ply < winPercentages.length; ply += 1) {
+    nextAccuracy[ply - 1] = compute_accuracy_for_move(
+      winPercentages[ply - 1],
+      winPercentages[ply],
+      ply - 1
+    );
+  }
+  accuracyValues = nextAccuracy;
 }
 
 function analysis_storage_key(fen) {
@@ -827,7 +902,9 @@ function update_engine_result_cache(result) {
     evaluationValues[result.ply] = normalized;
     renderEvaluationChart();
     recompute_loss_values();
+    recompute_win_and_accuracy_values();
     renderLossChart();
+    renderAccuracyChart();
   }
   persist_analysis_result(result);
 }
