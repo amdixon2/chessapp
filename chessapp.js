@@ -47,6 +47,7 @@ const ACCURACY_SCALE_MAX = 100;
 const ENGINE_WORKER_PATH = 'src/stockfish.js';
 const ENGINE_SEARCH_DEPTH = 16;
 const ENGINE_WAIT_TIMEOUT_MS = 15000;
+const ANALYSIS_STORAGE_PREFIX = 'chessapp/analysis/';
 const textDecoder = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
 
 let engineWorker = null;
@@ -204,10 +205,29 @@ function header_menu_handle_list_click(event) {
 }
 
 /* Button handlers */
-function btnStart_click() { stop_autoplay(); load_ply(0, true); }
-function btnPrev_click() { stop_autoplay(); load_ply(currentPly - 1, false); }
-function btnNext_click() { stop_autoplay(); load_ply(currentPly + 1, false); }
-function btnEnd_click() { stop_autoplay(); load_ply(positions.length - 1, true); }
+function btnStart_click() 
+{ 
+  stop_autoplay();
+  load_ply(0, true);
+}
+
+function btnPrev_click()
+{
+  stop_autoplay();
+  load_ply(currentPly - 1, false);
+}
+
+function btnNext_click()
+{
+  stop_autoplay();
+  load_ply(currentPly + 1, false);
+}
+
+function btnEnd_click()
+{
+  stop_autoplay();
+  load_ply(positions.length - 1, true);
+}
 
 function start_autoplay() {
   if (isPlaying) return;
@@ -635,7 +655,7 @@ async function engine_initialise() {
 
 function parse_engine_info_line(line) {
   if (!line || typeof line !== 'string') {
-    return { score: null, pv: [], rawInfo: line || '' };
+    return { score: null, pv: [], depth: null, rawInfo: line || '' };
   }
   const tokens = line.trim().split(/\s+/);
   const scoreIdx = tokens.indexOf('score');
@@ -647,9 +667,17 @@ function parse_engine_info_line(line) {
       score = { type: scoreType, value: scoreValue };
     }
   }
+  const depthIdx = tokens.indexOf('depth');
+  let depth = null;
+  if (depthIdx !== -1 && tokens[depthIdx + 1]) {
+    const depthValue = parseInt(tokens[depthIdx + 1], 10);
+    if (!Number.isNaN(depthValue)) {
+      depth = depthValue;
+    }
+  }
   const pvIdx = tokens.indexOf('pv');
   const pv = pvIdx !== -1 ? tokens.slice(pvIdx + 1) : [];
-  return { score, pv, rawInfo: line };
+  return { score, pv, depth, rawInfo: line };
 }
 
 function normalize_score_for_white(score, fen) {
@@ -673,6 +701,76 @@ function normalize_score_for_white(score, fen) {
   return null;
 }
 
+function analysis_storage_key(fen) {
+  return `${ANALYSIS_STORAGE_PREFIX}${fen}`;
+}
+
+function read_cached_analysis_payload(fen) {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(analysis_storage_key(fen));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch (err) {
+    console.warn('Failed to read cached analysis for FEN:', fen, err);
+    return null;
+  }
+}
+
+function load_cached_analysis_result(fen, ply) {
+  const payload = read_cached_analysis_payload(fen);
+  if (!payload) return null;
+  const score = payload.score;
+  const isScoreValid =
+    score &&
+    typeof score === 'object' &&
+    typeof score.type === 'string' &&
+    typeof score.value === 'number';
+  return {
+    fen,
+    ply,
+    bestmove: payload.bestmove || '',
+    ponder: payload.ponder || null,
+    score: isScoreValid ? score : null,
+    pv: Array.isArray(payload.pv) ? payload.pv : [],
+    rawInfo: payload.rawInfo || '',
+    depth:
+      typeof payload.depth === 'number' && !Number.isNaN(payload.depth)
+        ? payload.depth
+        : null,
+    cachedAt: payload.cachedAt || null,
+    source: 'cache'
+  };
+}
+
+function persist_analysis_result(result) {
+  if (!result || result.error || result.source === 'cache') return;
+  if (!result.fen) return;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const payload = {
+      bestmove: result.bestmove || '',
+      ponder: result.ponder || null,
+      score: result.score || null,
+      pv: Array.isArray(result.pv) ? result.pv : [],
+      depth:
+        typeof result.depth === 'number' && !Number.isNaN(result.depth)
+          ? result.depth
+          : null,
+      rawInfo: result.rawInfo || '',
+      cachedAt: Date.now()
+    };
+    localStorage.setItem(
+      analysis_storage_key(result.fen),
+      JSON.stringify(payload)
+    );
+  } catch (err) {
+    console.warn('Failed to persist analysis for FEN:', result.fen, err);
+  }
+}
+
 function update_engine_result_cache(result) {
   if (!result || typeof result.ply !== 'number') return;
   if (!positions[result.ply] || positions[result.ply] !== result.fen) return;
@@ -687,6 +785,7 @@ function update_engine_result_cache(result) {
     evaluationValues[result.ply] = normalized;
     renderEvaluationChart();
   }
+  persist_analysis_result(result);
 }
 
 function engine_analyse_fen(fen, plyIndex) {
@@ -731,7 +830,9 @@ function engine_analyse_fen(fen, plyIndex) {
         ponder,
         score: parsed.score,
         pv: parsed.pv,
-        rawInfo: parsed.rawInfo
+        depth: parsed.depth,
+        rawInfo: parsed.rawInfo,
+        source: 'engine'
       };
       update_engine_result_cache(result);
       cleanup();
@@ -747,21 +848,49 @@ function engine_analyse_fen(fen, plyIndex) {
 }
 
 async function engine_run_analysis_for_list(fenList) {
-  const initialised = await engine_initialise();
-  if (!initialised) return;
-  const results = [];
+  const results = new Array(fenList.length);
+  const pending = [];
+
   for (let i = 0; i < fenList.length; i += 1) {
     const fen = fenList[i];
-    try {
-      const result = await engine_analyse_fen(fen, i);
-      results[i] = result;
-    } catch (err) {
-      const errorResult = { fen, ply: i, error: err.message };
-      results[i] = errorResult;
-      update_engine_result_cache(errorResult);
-      console.warn('Engine analysis failed for FEN:', fen, err);
+    const cachedResult = load_cached_analysis_result(fen, i);
+    if (cachedResult) {
+      results[i] = cachedResult;
+      update_engine_result_cache(cachedResult);
+    } else {
+      pending.push({ fen, index: i });
     }
   }
+
+  if (pending.length > 0) {
+    const initialised = await engine_initialise();
+    if (!initialised) {
+      pending.forEach(item => {
+        const errorResult = {
+          fen: item.fen,
+          ply: item.index,
+          error: 'Engine initialisation failed'
+        };
+        results[item.index] = errorResult;
+        update_engine_result_cache(errorResult);
+      });
+      publish_analysis_results(results);
+      return;
+    }
+
+    for (const { fen, index } of pending) {
+      try {
+        const result = await engine_analyse_fen(fen, index);
+        results[index] = result;
+      } catch (err) {
+        const errorResult = { fen, ply: index, error: err.message };
+        results[index] = errorResult;
+        update_engine_result_cache(errorResult);
+        console.warn('Engine analysis failed for FEN:', fen, err);
+      }
+    }
+  }
+
   publish_analysis_results(results);
 }
 
