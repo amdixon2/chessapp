@@ -35,6 +35,7 @@ let lossCtx = null;
 let accuracyCanvas = null;
 let accuracyCtx = null;
 let accuracyValues = [];
+let lossValues = [];
 let evaluationValues = [];
 let headerMenuEl = null;
 let menuToggleBtn = null;
@@ -277,12 +278,14 @@ function load_pgn(pgn, moveListElement) {
 
   const tmp = new Chess();
   positions = [tmp.fen()];
+  evaluationValues = [default_eval_for_position(tmp)];
   historyMoves.forEach(mv => {
     tmp.move(mv);
     positions.push(tmp.fen());
+    evaluationValues.push(default_eval_for_position(tmp));
   });
-  evaluationValues = new Array(positions.length).fill(0);
   accuracyValues = new Array(positions.length).fill(50);
+  recompute_loss_values();
   analysisResults = new Array(positions.length);
   if (typeof window !== 'undefined') {
     window.chessappAnalysisResults = analysisResults;
@@ -422,8 +425,14 @@ function renderLossChart() {
   const barWidth = totalPly > 0 ? Math.max(stepX * 0.6, 2) : stepX;
   for (let ply = 1; ply <= totalPly; ply += 1) {
     const xCenter = Math.min((ply - 0.5) * stepX, width);
-    const value = 1;
+    const rawValue = Array.isArray(lossValues) && typeof lossValues[ply] === 'number'
+      ? lossValues[ply]
+      : 0;
+    const value = Math.max(0, Math.min(LOSS_SCALE_MAX, rawValue));
     const yTop = valueToY(value);
+    if (value === 0) {
+      continue;
+    }
     const barColor = ply % 2 === 1 ? '#ffffff' : '#000000';
     lossCtx.fillStyle = barColor;
     lossCtx.strokeStyle = '#586e75';
@@ -693,12 +702,45 @@ function normalize_score_for_white(score, fen) {
     return Math.max(EVAL_SCALE_MIN, Math.min(EVAL_SCALE_MAX, adjusted));
   }
   if (score.type === 'mate') {
-    if (score.value === 0) return 0;
+    if (score.value === 0) {
+      return -perspective * EVAL_SCALE_MAX;
+    }
     const mateSign = score.value > 0 ? 1 : -1;
     const adjusted = mateSign * perspective * EVAL_SCALE_MAX;
     return Math.max(EVAL_SCALE_MIN, Math.min(EVAL_SCALE_MAX, adjusted));
   }
   return null;
+}
+
+function default_eval_for_position(chessInstance) {
+  if (!chessInstance || typeof chessInstance.in_checkmate !== 'function') {
+    return 0;
+  }
+  if (!chessInstance.in_checkmate()) return 0;
+  return chessInstance.turn() === 'w' ? EVAL_SCALE_MIN : EVAL_SCALE_MAX;
+}
+
+function recompute_loss_values() {
+  if (!Array.isArray(evaluationValues) || evaluationValues.length === 0) {
+    lossValues = [];
+    return;
+  }
+  const next = new Array(evaluationValues.length).fill(0);
+  for (let ply = 1; ply < evaluationValues.length; ply += 1) {
+    const prevEval = typeof evaluationValues[ply - 1] === 'number'
+      ? evaluationValues[ply - 1]
+      : null;
+    const currentEval = typeof evaluationValues[ply] === 'number'
+      ? evaluationValues[ply]
+      : null;
+    if (prevEval === null || currentEval === null) {
+      next[ply] = 0;
+      continue;
+    }
+    const diff = Math.abs(currentEval - prevEval);
+    next[ply] = Math.min(LOSS_SCALE_MAX, diff);
+  }
+  lossValues = next;
 }
 
 function analysis_storage_key(fen) {
@@ -784,6 +826,8 @@ function update_engine_result_cache(result) {
   if (typeof normalized === 'number' && !Number.isNaN(normalized)) {
     evaluationValues[result.ply] = normalized;
     renderEvaluationChart();
+    recompute_loss_values();
+    renderLossChart();
   }
   persist_analysis_result(result);
 }
