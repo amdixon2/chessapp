@@ -52,7 +52,11 @@ const ACCURACY_CURVE_B = 0.04354;
 const ACCURACY_CURVE_C = 3.1669;
 const ENGINE_WORKER_PATH = 'src/stockfish.js';
 const ENGINE_SEARCH_DEPTH = 16;
+const ENGINE_DEEP_SEARCH_DEPTH = 24;
+const ENGINE_LOSS_THRESHOLD_FOR_DEEP_ANALYSIS = 1.0;
 const ENGINE_WAIT_TIMEOUT_MS = 15000;
+const READY_CHECK_INTERVAL_MS = 5000;
+const READY_CHECK_RESPONSE_TIMEOUT_MS = ENGINE_WAIT_TIMEOUT_MS * 2;
 const ANALYSIS_STORAGE_PREFIX = 'chessapp/analysis/';
 const textDecoder = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
 
@@ -60,9 +64,10 @@ let engineWorker = null;
 let engineInitPromise = null;
 let engineListeners = [];
 let engineWaiters = [];
-let engineAnalysisPending = null;
+const engineAnalysisQueue = [];
 let engineAnalysisRunning = false;
 let analysisResults = [];
+const deepAnalysisRequested = new Set();
 
 /* Convert a FEN to an 8x8 array */
 function fen2matrix(fen) {
@@ -542,10 +547,9 @@ function renderAccuracyChart() {
   accuracyCtx.restore();
 }
 
-function publish_analysis_results(results) {
-  analysisResults = results;
+function publish_analysis_results() {
   if (typeof window !== 'undefined') {
-    window.chessappAnalysisResults = results;
+    window.chessappAnalysisResults = analysisResults;
   }
 }
 
@@ -818,6 +822,37 @@ function recompute_win_and_accuracy_values() {
   accuracyValues = nextAccuracy;
 }
 
+function maybe_schedule_deep_analysis(result) {
+  if (!result || typeof result.ply !== 'number') return;
+  const ply = result.ply;
+  if (ply <= 0) return;
+  if (!positions || ply >= positions.length - 1) return;
+  if (deepAnalysisRequested.has(ply)) {
+    deepAnalysisRequested.delete(ply);
+    return;
+  }
+  if (result.error) return;
+  const score = result.score;
+  if (score && typeof score === 'object' && score.type === 'mate') {
+    return;
+  }
+  const depth = typeof result.depth === 'number' ? result.depth : null;
+  if (depth === null) return;
+  if (depth < 1 || depth >= ENGINE_DEEP_SEARCH_DEPTH) return;
+  if (!Array.isArray(lossValues) || ply >= lossValues.length) return;
+  const loss = lossValues[ply];
+  if (typeof loss !== 'number' || Number.isNaN(loss) || loss <= ENGINE_LOSS_THRESHOLD_FOR_DEEP_ANALYSIS) {
+    return;
+  }
+  if (!positions[ply]) return;
+  deepAnalysisRequested.add(ply);
+  engine_schedule_analysis([{
+    fen: positions[ply],
+    index: ply,
+    depth: ENGINE_DEEP_SEARCH_DEPTH
+  }]);
+}
+
 function analysis_storage_key(fen) {
   return `${ANALYSIS_STORAGE_PREFIX}${fen}`;
 }
@@ -907,29 +942,74 @@ function update_engine_result_cache(result) {
     renderAccuracyChart();
   }
   persist_analysis_result(result);
+  maybe_schedule_deep_analysis(result);
 }
 
-function engine_analyse_fen(fen, plyIndex) {
+function engine_analyse_fen(fen, plyIndex, searchDepth = ENGINE_SEARCH_DEPTH) {
   return new Promise((resolve, reject) => {
     if (!engine_send(`position fen ${fen}`)) {
       reject(new Error('Engine worker not available'));
       return;
     }
-    if (!engine_send(`go depth ${ENGINE_SEARCH_DEPTH}`)) {
+    if (!engine_send(`go depth ${searchDepth}`)) {
       reject(new Error('Failed to send go command'));
       return;
     }
 
     const infoLines = [];
     let settled = false;
+    let readyCheckIntervalId = null;
+    let readyCheckPending = false;
+    let latestReadyProbe = null;
+    let lastActivityAt = Date.now();
     const cleanup = () => {
       if (settled) return;
       settled = true;
       removeListener();
-      clearTimeout(timeoutId);
+      if (readyCheckIntervalId) {
+        clearInterval(readyCheckIntervalId);
+        readyCheckIntervalId = null;
+      }
+      readyCheckPending = false;
+      latestReadyProbe = null;
+    };
+    const fail = (message) => {
+      if (settled) return;
+      cleanup();
+      reject(new Error(message));
+    };
+
+    const sendReadyProbe = () => {
+      if (settled || readyCheckPending) return;
+      if (Date.now() - lastActivityAt < READY_CHECK_INTERVAL_MS) return;
+      readyCheckPending = true;
+      if (!engine_send('isready')) {
+        readyCheckPending = false;
+        fail('Engine worker not available');
+        return;
+      }
+      const probePromise = engine_wait_for(
+        line => line.startsWith('readyok'),
+        READY_CHECK_RESPONSE_TIMEOUT_MS
+      );
+      latestReadyProbe = probePromise;
+      probePromise.then(() => {
+        if (settled || latestReadyProbe !== probePromise) return;
+        readyCheckPending = false;
+      }).catch(() => {
+        if (settled || latestReadyProbe !== probePromise) return;
+        readyCheckPending = false;
+        fail('Engine unresponsive (no readyok received)');
+      });
+    };
+
+    const startReadyChecks = () => {
+      if (readyCheckIntervalId) return;
+      readyCheckIntervalId = setInterval(sendReadyProbe, READY_CHECK_INTERVAL_MS);
     };
 
     const listener = (line) => {
+      lastActivityAt = Date.now();
       if (line.startsWith('info ')) {
         infoLines.push(line);
         return;
@@ -961,81 +1041,107 @@ function engine_analyse_fen(fen, plyIndex) {
     };
 
     const removeListener = engine_add_listener(listener);
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      reject(new Error('Engine search timeout'));
-    }, ENGINE_WAIT_TIMEOUT_MS * 2);
+    startReadyChecks();
   });
 }
 
-async function engine_run_analysis_for_list(fenList) {
-  const results = new Array(fenList.length);
-  const pending = [];
+function is_cached_result_sufficient(result, requiredDepth) {
+  if (!result || result.error) return false;
+  const score = result.score;
+  if (score && typeof score === 'object' && score.type === 'mate') {
+    return true;
+  }
+  if (typeof requiredDepth !== 'number') return true;
+  const depth = typeof result.depth === 'number' ? result.depth : null;
+  if (depth === null) return false;
+  return depth >= requiredDepth;
+}
 
-  for (let i = 0; i < fenList.length; i += 1) {
-    const fen = fenList[i];
-    const cachedResult = load_cached_analysis_result(fen, i);
-    if (cachedResult) {
-      results[i] = cachedResult;
+function normalize_analysis_requests(requests) {
+  const normalized = [];
+  if (!Array.isArray(requests)) return normalized;
+  for (let i = 0; i < requests.length; i += 1) {
+    const item = requests[i];
+    if (typeof item === 'string') {
+      normalized.push({ fen: item, index: i, depth: ENGINE_SEARCH_DEPTH });
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    const fen = typeof item.fen === 'string' ? item.fen : null;
+    if (!fen) continue;
+    const index = typeof item.index === 'number' ? item.index : i;
+    const depth =
+      typeof item.depth === 'number' && !Number.isNaN(item.depth)
+        ? item.depth
+        : ENGINE_SEARCH_DEPTH;
+    normalized.push({ fen, index, depth });
+  }
+  return normalized;
+}
+
+async function engine_run_analysis_for_list(requests) {
+  const normalized = normalize_analysis_requests(requests);
+  if (normalized.length === 0) return;
+
+  const pending = [];
+  normalized.forEach(req => {
+    const cachedResult = load_cached_analysis_result(req.fen, req.index);
+    if (cachedResult && is_cached_result_sufficient(cachedResult, req.depth)) {
       update_engine_result_cache(cachedResult);
     } else {
-      pending.push({ fen, index: i });
+      pending.push(req);
     }
-  }
+  });
 
   if (pending.length > 0) {
     const initialised = await engine_initialise();
     if (!initialised) {
-      pending.forEach(item => {
+      pending.forEach(req => {
         const errorResult = {
-          fen: item.fen,
-          ply: item.index,
+          fen: req.fen,
+          ply: req.index,
           error: 'Engine initialisation failed'
         };
-        results[item.index] = errorResult;
         update_engine_result_cache(errorResult);
       });
-      publish_analysis_results(results);
+      publish_analysis_results();
       return;
     }
 
-    for (const { fen, index } of pending) {
+    for (const req of pending) {
       try {
-        const result = await engine_analyse_fen(fen, index);
-        results[index] = result;
+        await engine_analyse_fen(req.fen, req.index, req.depth);
       } catch (err) {
-        const errorResult = { fen, ply: index, error: err.message };
-        results[index] = errorResult;
+        const errorResult = { fen: req.fen, ply: req.index, error: err.message };
         update_engine_result_cache(errorResult);
-        console.warn('Engine analysis failed for FEN:', fen, err);
+        console.warn('Engine analysis failed for FEN:', req.fen, err);
       }
     }
   }
 
-  publish_analysis_results(results);
+  publish_analysis_results();
 }
 
 async function engine_process_queue() {
   if (engineAnalysisRunning) return;
-  if (!engineAnalysisPending || engineAnalysisPending.length === 0) return;
-  const nextList = engineAnalysisPending;
-  engineAnalysisPending = null;
+  if (!engineAnalysisQueue.length) return;
+  const job = engineAnalysisQueue.shift();
   engineAnalysisRunning = true;
   try {
-    await engine_run_analysis_for_list(nextList);
+    await engine_run_analysis_for_list(job.requests);
   } catch (err) {
     console.warn('Engine analysis run failed:', err);
   } finally {
     engineAnalysisRunning = false;
-    if (engineAnalysisPending && engineAnalysisPending.length > 0) {
+    if (engineAnalysisQueue.length > 0) {
       engine_process_queue();
     }
   }
 }
 
-function engine_schedule_analysis(fenList) {
-  if (!Array.isArray(fenList) || fenList.length === 0) return;
-  engineAnalysisPending = fenList;
+function engine_schedule_analysis(requests) {
+  if (!Array.isArray(requests) || requests.length === 0) return;
+  engineAnalysisQueue.push({ requests });
   engine_process_queue();
 }
 
