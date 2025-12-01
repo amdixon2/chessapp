@@ -44,6 +44,7 @@ let menuListEl = null;
 let enginePvPanelEl = null;
 let enginePvEvalEl = null;
 let enginePvMovesEl = null;
+let headerTitleEl = null;
 
 const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
@@ -277,6 +278,7 @@ function load_pgn(pgn, moveListElement) {
   }
   game = new Chess();
   game.loadPgn(pgn);
+  update_header_title_from_game(game);
   const historyMoves = game.history();
   moveListElement.innerHTML = '';
   const movesAsPairs = [];
@@ -828,6 +830,30 @@ function recompute_win_and_accuracy_values() {
   accuracyValues = nextAccuracy;
 }
 
+function extract_year_from_header(headerValue) {
+  if (!headerValue || typeof headerValue !== 'string') return null;
+  const match = headerValue.match(/(\d{4})/);
+  return match ? match[1] : null;
+}
+
+function update_header_title_from_game(gameInstance) {
+  if (!headerTitleEl || !gameInstance || typeof gameInstance.header !== 'function') return;
+  const headers = gameInstance.header();
+  const white = headers.White || 'White';
+  const black = headers.Black || 'Black';
+  const dateHeader = headers.Date || headers.EventDate || '';
+  const year = extract_year_from_header(dateHeader);
+  const result = headers.Result || '';
+  let title = `${white} vs ${black}`;
+  if (year) {
+    title += ` ${year}`;
+  }
+  if (result) {
+    title += `; ${result}`;
+  }
+  headerTitleEl.textContent = title;
+}
+
 function format_engine_eval_text(score, fen) {
   if (!score || typeof score !== 'object') return '—';
   if (score.type === 'mate') {
@@ -1307,11 +1333,60 @@ function init_left_column_toggles() {
   }
 }
 
+function parse_gid_from_location() {
+  if (typeof window === 'undefined' || !window.location) return null;
+  try {
+    const url = new URL(window.location.href);
+    const raw = url.searchParams.get('gid');
+    if (!raw) return null;
+    const trimmed = raw.trim();
+    return trimmed.length ? trimmed : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function fetch_pgn_for_gid(gid) {
+  if (!gid || typeof fetch === 'undefined') {
+    return Promise.resolve(null);
+  }
+  const requestUrl = `gamepgn.php?gid=${encodeURIComponent(gid)}`;
+  return fetch(requestUrl, { cache: 'no-store' })
+    .then(response => (response.ok ? response.text() : ''))
+    .then(text => {
+      const trimmed = typeof text === 'string' ? text.trim() : '';
+      return trimmed.length ? trimmed : null;
+    })
+    .catch(() => null);
+}
+
+function load_game_with_pgn(pgnText) {
+  const pgn = pgnText && pgnText.trim().length ? pgnText : operaGamePGN;
+  load_pgn(pgn, moveListEl);
+  load_ply(0, true);
+}
+
+function bootstrap_initial_game() {
+  const gid = parse_gid_from_location();
+  if (!gid) {
+    load_game_with_pgn(operaGamePGN);
+    return;
+  }
+  fetch_pgn_for_gid(gid).then((pgn) => {
+    if (pgn) {
+      load_game_with_pgn(pgn);
+    } else {
+      load_game_with_pgn(operaGamePGN);
+    }
+  });
+}
+
 
 /* Main */
 function main() {
   boardEl = document.getElementById('chessboard');
   moveListEl = document.getElementById('moveList');
+  headerTitleEl = document.getElementById('pageTitle');
   evalCanvas = document.getElementById('analysisCanvas');
   evalCtx = evalCanvas ? evalCanvas.getContext('2d') : null;
   lossCanvas = document.getElementById('lossCanvas');
@@ -1339,8 +1414,7 @@ function main() {
   }
   document.addEventListener('click', header_menu_handle_document_click);
   document.addEventListener('keydown', header_menu_handle_keydown);
-  load_pgn(operaGamePGN, moveListEl);
-  load_ply(0, true);
+  bootstrap_initial_game();
 }
 
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
