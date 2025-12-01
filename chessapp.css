@@ -295,6 +295,42 @@ header h1 {
   overflow-y: auto;
 }
 
+.engine-pv-panel {
+  background-color: #002b36;
+  border: 1px solid #586e75;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.engine-pv-panel__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 0.95rem;
+  color: #b58900;
+}
+
+.engine-pv-panel__eval {
+  font-weight: bold;
+  color: #2aa198;
+}
+
+.engine-pv-panel__moves {
+  font-size: 0.9rem;
+  color: #93a1a1;
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+
+.engine-pv-panel--waiting .engine-pv-panel__moves {
+  font-style: italic;
+  color: #657b83;
+}
+
 .sidebar ol {
   padding-left: 20px;
   list-style-position: inside;

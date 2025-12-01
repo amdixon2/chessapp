@@ -41,6 +41,9 @@ let evaluationValues = [];
 let headerMenuEl = null;
 let menuToggleBtn = null;
 let menuListEl = null;
+let enginePvPanelEl = null;
+let enginePvEvalEl = null;
+let enginePvMovesEl = null;
 
 const EVAL_SCALE_MIN = -9;
 const EVAL_SCALE_MAX = 9;
@@ -181,6 +184,7 @@ function load_ply(ply, forceFull = false) {
   renderEvaluationChart();
   renderLossChart();
   renderAccuracyChart();
+  update_engine_pv_panel();
 }
 
 function header_menu_set_open(isOpen) {
@@ -300,9 +304,11 @@ function load_pgn(pgn, moveListElement) {
   if (typeof window !== 'undefined') {
     window.chessappAnalysisResults = analysisResults;
   }
+  prime_analysis_results_from_cache();
   renderEvaluationChart();
   renderLossChart();
   renderAccuracyChart();
+  update_engine_pv_panel();
   trigger_engine_analysis();
 }
 
@@ -822,6 +828,102 @@ function recompute_win_and_accuracy_values() {
   accuracyValues = nextAccuracy;
 }
 
+function format_engine_eval_text(score, fen) {
+  if (!score || typeof score !== 'object') return '—';
+  if (score.type === 'mate') {
+    const moves = typeof score.value === 'number' ? Math.abs(score.value) : null;
+    let sign = score.value > 0 ? 1 : -1;
+    if (typeof fen === 'string') {
+      const parts = fen.split(' ');
+      if (parts[1] === 'b') sign *= -1;
+    }
+    const prefix = sign >= 0 ? '#+' : '#-';
+    return moves ? `${prefix}${moves}` : '#';
+  }
+  if (score.type === 'cp') {
+    let value = typeof score.value === 'number' ? score.value / 100 : 0;
+    if (typeof fen === 'string') {
+      const parts = fen.split(' ');
+      if (parts[1] === 'b') {
+        value *= -1;
+      }
+    }
+    const rounded = value.toFixed(2);
+    return value >= 0 ? `+${rounded}` : rounded;
+  }
+  return '—';
+}
+
+function convert_pv_tokens_to_san(fen, pvTokens, limit = 8) {
+  if (!Array.isArray(pvTokens) || pvTokens.length === 0) return [];
+  if (typeof Chess === 'undefined') {
+    return pvTokens.slice(0, limit);
+  }
+  let chess = null;
+  try {
+    chess = new Chess(fen);
+  } catch (err) {
+    chess = new Chess();
+    if (typeof chess.load === 'function') {
+      const loaded = chess.load(fen);
+      if (!loaded) {
+        return pvTokens.slice(0, limit);
+      }
+    } else {
+      return pvTokens.slice(0, limit);
+    }
+  }
+  const sanMoves = [];
+  for (let i = 0; i < pvTokens.length && sanMoves.length < limit; i += 1) {
+    const token = pvTokens[i];
+    if (typeof token !== 'string') break;
+    let move = null;
+    try {
+      move = chess.move(token, { sloppy: true });
+    } catch (err) {
+      move = null;
+    }
+    if (!move) {
+      const from = token.slice(0, 2);
+      const to = token.slice(2, 4);
+      if (from.length === 2 && to.length === 2) {
+        const promotion = token.length > 4 ? token[4] : undefined;
+        move = chess.move({ from, to, promotion });
+      }
+    }
+    if (!move) break;
+    sanMoves.push(move.san);
+  }
+  return sanMoves;
+}
+
+function update_engine_pv_panel() {
+  if (!enginePvPanelEl || !enginePvEvalEl || !enginePvMovesEl) return;
+  let result = Array.isArray(analysisResults) ? analysisResults[currentPly] : null;
+  if ((!result || result.error) && positions && positions[currentPly]) {
+    const cached = load_cached_analysis_result(positions[currentPly], currentPly);
+    if (cached) {
+      update_engine_result_cache(cached);
+      return;
+    }
+  }
+  if (!result || result.error) {
+    enginePvPanelEl.classList.add('engine-pv-panel--waiting');
+    enginePvEvalEl.textContent = '—';
+    enginePvMovesEl.textContent = result && result.error
+      ? result.error
+      : 'Awaiting analysis…';
+    return;
+  }
+  const evalText = format_engine_eval_text(result.score, result.fen);
+  const sanMoves = convert_pv_tokens_to_san(result.fen, result.pv);
+  enginePvEvalEl.textContent = evalText;
+  enginePvMovesEl.textContent = sanMoves.length > 0
+    ? sanMoves.join(' ')
+    : 'No PV available';
+  enginePvPanelEl.classList.remove('engine-pv-panel--waiting');
+}
+
 function maybe_schedule_deep_analysis(result) {
   if (!result || typeof result.ply !== 'number') return;
   const ply = result.ply;
@@ -897,6 +999,21 @@ function load_cached_analysis_result(fen, ply) {
   };
 }
 
+function prime_analysis_results_from_cache() {
+  if (!Array.isArray(positions) || positions.length === 0) return;
+  if (!Array.isArray(analysisResults)) {
+    analysisResults = new Array(positions.length);
+  }
+  for (let i = 0; i < positions.length; i += 1) {
+    const fen = positions[i];
+    const cached = load_cached_analysis_result(fen, i);
+    if (cached) {
+      analysisResults[i] = cached;
+      update_engine_result_cache(cached);
+    }
+  }
+}
+
 function persist_analysis_result(result) {
   if (!result || result.error || result.source === 'cache') return;
   if (!result.fen) return;
@@ -943,6 +1060,9 @@ function update_engine_result_cache(result) {
   }
   persist_analysis_result(result);
   maybe_schedule_deep_analysis(result);
+  if (result.ply === currentPly) {
+    update_engine_pv_panel();
+  }
 }
 
 function engine_analyse_fen(fen, plyIndex, searchDepth = ENGINE_SEARCH_DEPTH) {
@@ -1201,6 +1321,9 @@ function main() {
   headerMenuEl = document.getElementById('headerMenu');
   menuToggleBtn = document.getElementById('menuToggle');
   menuListEl = document.getElementById('menuList');
+  enginePvPanelEl = document.getElementById('enginePvPanel');
+  enginePvEvalEl = document.getElementById('enginePvEval');
+  enginePvMovesEl = document.getElementById('enginePvMoves');
   document.getElementById('btnStart').addEventListener('click', btnStart_click);
   document.getElementById('btnPrev').addEventListener('click', btnPrev_click);
   document.getElementById('btnNext').addEventListener('click', btnNext_click);
