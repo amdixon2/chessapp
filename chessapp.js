@@ -171,7 +171,9 @@ function highlight_move(ply) {
   if (ply === 0) return;
   if (moveIndex >= 0 && moveIndex < sidebarLis.length) {
     sidebarLis[moveIndex].classList.add('move-active');
-    sidebarLis[moveIndex].scrollIntoView({ block: 'nearest' });
+    if (typeof window !== 'undefined' && window.innerWidth >= 801) {
+      sidebarLis[moveIndex].scrollIntoView({ block: 'nearest' });
+    }
   }
 }
 
