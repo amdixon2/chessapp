@@ -134,84 +134,6 @@ header h1 {
   margin-top: 20px;
 }
 
-.left-column {
-  display: none;
-}
-
-@media (min-width: 801px) {
-  .left-column {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 400px;
-  }
-
-  .left-column canvas {
-    width: 100%;
-    border: 2px solid #586e75;
-    background-color: #001f27;
-  }
-}
-
-.left-column__toggle-group {
-  display: flex;
-  width: 100%;
-  margin-bottom: 12px;
-  border: 1px solid #586e75;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.left-column__toggle {
-  flex: 1;
-  padding: 8px 12px;
-  background-color: #002b36;
-  color: #93a1a1;
-  border: none;
-  font-family: inherit;
-  font-size: 0.95rem;
-  cursor: pointer;
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-.left-column__toggle + .left-column__toggle {
-  border-left: 1px solid #586e75;
-}
-
-.left-column__toggle.is-active {
-  background-color: #268bd2;
-  color: #fdf6e3;
-}
-
-.left-column__toggle:focus {
-  outline: none;
-  box-shadow: inset 0 0 0 2px #b58900;
-}
-
-.left-column__section {
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-}
-
-.left-column__section.is-visible {
-  display: flex;
-}
-
-.left-column__section canvas + canvas {
-  margin-top: 16px;
-}
-
-#analysisCanvas,
-#lossCanvas {
-  height: 285px;
-}
-
-#accuracyCanvas {
-  height: 200px;
-}
-
 /* === Chessboard === */
 .board {
   display: grid;
@@ -243,6 +165,10 @@ header h1 {
   height: 100px;
   pointer-events: none;
   filter: brightness(0.80) contrast(1.1);
+}
+
+.square--selected {
+  box-shadow: inset 0 0 0 3px #b58900;
 }
 
 /* === Control Buttons === */
@@ -295,16 +221,38 @@ header h1 {
   overflow-y: auto;
 }
 
-.engine-pv-panel {
+.moves-panel__action {
+  width: 100%;
+  margin: 40px 0 12px;
+  padding: 8px 10px;
+  background-color: #002b36;
+  color: #b58900;
+  border: 1px solid #586e75;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.moves-panel__action:hover,
+.moves-panel__action:focus {
+  background-color: #268bd2;
+  color: #fdf6e3;
+  outline: none;
+}
+
+.analysis-panel {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 10px;
   background-color: #002b36;
   border: 1px solid #586e75;
   border-radius: 6px;
-  padding: 10px;
-  margin-bottom: 12px;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 
-.engine-pv-panel__header {
+.analysis-panel__header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -314,21 +262,16 @@ header h1 {
   color: #b58900;
 }
 
-.engine-pv-panel__eval {
+.analysis-panel__eval {
   font-weight: bold;
   color: #2aa198;
 }
 
-.engine-pv-panel__moves {
+.analysis-panel__pv {
   font-size: 0.9rem;
   color: #93a1a1;
   line-height: 1.4;
   min-height: 1.4em;
-}
-
-.engine-pv-panel--waiting .engine-pv-panel__moves {
-  font-style: italic;
-  color: #657b83;
 }
 
 .sidebar ol {
